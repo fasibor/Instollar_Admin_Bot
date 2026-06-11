@@ -52,6 +52,7 @@ async function initDb() {
         panels INTEGER NOT NULL,
         panel_wattage TEXT,
         photo_file_id TEXT,
+        video_file_id TEXT,
         posted_by BIGINT NOT NULL,
         message_id BIGINT,
         scheduled_at TIMESTAMP,

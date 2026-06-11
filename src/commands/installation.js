@@ -10,19 +10,19 @@ const { isAdmin, formatInstallationPost } = require('../utils/helpers');
 const session = require('../utils/session');
 const db      = require('../database/db');
 
-const STEPS = ['location', 'client_name', 'system_size', 'battery', 'battery_count', 'panels', 'panel_wattage', 'photo', 'schedule'];
+const STEPS = ['location', 'client_name', 'system_size', 'battery', 'battery_count', 'panels', 'panel_wattage', 'media', 'schedule'];
 const MAX   = { location: 100, client_name: 100, system_size: 30, battery: 30, battery_count: 3, panel_wattage: 20 };
 
 const PROMPTS = {
-  location:      '*Step 1 of 9* — Enter the *location*:\n_(e.g. Lekki, Lagos)_',
-  client_name:   '*Step 2 of 9* — Enter the *client name*:\n_(e.g. ABC Residence)_',
-  system_size:   '*Step 3 of 9* — Enter the *system size* (inverter):\n_(e.g. 5KVA, 10KVA)_',
-  battery:       '*Step 4 of 9* — Enter the *battery capacity*:\n_(e.g. 10KWh, 5KWh)_',
-  battery_count: '*Step 5 of 9* — Enter the *number of batteries*:\n_(e.g. 2, 4)_',
-  panels:        '*Step 6 of 9* — Enter the *number of panels*:\n_(e.g. 12)_',
-  panel_wattage: '*Step 7 of 9* — Enter the *panel wattage*:\n_(e.g. 590w, 450w)_',
-  photo:         '*Step 8 of 9* — Send a *photo* of the installation:\n_(or type SKIP to continue without photo)_',
-  schedule:      '*Step 9 of 9* — Schedule this post?\n_Reply with:_\n  IMMEDIATE — Publish now\n  YYYY-MM-DD HH:MM — Schedule for specific date/time (e.g. 2024-12-25 14:30)',
+  location:      '📍 *Step 1 of 9* — Enter the *location*:\n_(e.g. Lekki, Lagos)_',
+  client_name:   '👤 *Step 2 of 9* — Enter the *client name*:\n_(e.g. ABC Residence)_',
+  system_size:   '⚡ *Step 3 of 9* — Enter the *system size* (inverter):\n_(e.g. 5KVA, 10KVA)_',
+  battery:       '🔋 *Step 4 of 9* — Enter the *battery capacity*:\n_(e.g. 10KWh, 5KWh)_',
+  battery_count: '🔋 *Step 5 of 9* — Enter the *number of batteries*:\n_(e.g. 2, 4)_',
+  panels:        '📊 *Step 6 of 9* — Enter the *number of panels*:\n_(e.g. 12)_',
+  panel_wattage: '⚡ *Step 7 of 9* — Enter the *panel wattage*:\n_(e.g. 590w, 450w)_',
+  media:         '📸 *Step 8 of 9* — Send a *photo or video* of the installation:\n_(or type SKIP to continue without media)_',
+  schedule:      '⏰ *Step 9 of 9* — Schedule this post?\n_Reply with:_\n  IMMEDIATE — Publish now\n  YYYY-MM-DD HH:MM — Schedule for specific date/time (e.g. 2024-12-25 14:30)',
 };
 
 function registerInstallationCommand(bot) {
@@ -30,7 +30,7 @@ function registerInstallationCommand(bot) {
     if (!isAdmin(ctx.from.id)) return ctx.reply('This command is restricted to administrators.');
     session.set('installation', ctx.from.id, { step: 0, data: {} });
     await ctx.reply(
-      '*NEW INSTALLATION — Setup*\n\nYou are creating an installation announcement.\nType /cancel at any time to abort.\n\n' + PROMPTS.location,
+      '✨ *NEW INSTALLATION — Setup*\n\nYou are creating an installation announcement.\nType /cancel at any time to abort.\n\n' + PROMPTS.location,
       { parse_mode: 'Markdown' }
     );
   });
@@ -43,19 +43,23 @@ async function handleInstallationWizard(ctx, bot) {
 
   const currentStep = STEPS[s.step];
 
-  // Handle photo step (accepts photo or SKIP)
-  if (currentStep === 'photo') {
+  // Handle media step (accepts photo, video, or SKIP)
+  if (currentStep === 'media') {
     const text = ctx.message?.text?.trim().toUpperCase();
     
     if (text === 'SKIP') {
       s.data.photo_file_id = null;
+      s.data.video_file_id = null;
     } else if (ctx.message?.photo) {
       const photos = ctx.message.photo;
       const largestPhoto = photos[photos.length - 1];
       s.data.photo_file_id = largestPhoto.file_id;
-      await ctx.reply('Photo received! Continuing...');
+      await ctx.reply('✅ Photo received! Continuing...');
+    } else if (ctx.message?.video) {
+      s.data.video_file_id = ctx.message.video.file_id;
+      await ctx.reply('✅ Video received! Continuing...');
     } else {
-      await ctx.reply('Please send a photo or reply SKIP to continue without one.');
+      await ctx.reply('📸 Please send a photo, video, or reply SKIP to continue without media.');
       return true;
     }
     
@@ -96,7 +100,7 @@ async function handleInstallationWizard(ctx, bot) {
     session.set('installation_confirm', userId, { data: s.data });
 
     await ctx.reply(
-      `*PREVIEW — Installation Post*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${preview}\n\n━━━━━━━━━━━━━━━━━━━━━━━\nReply *CONFIRM* to ${s.data.schedule_type === 'immediate' ? 'publish' : 'schedule'} or *CANCEL* to discard.`,
+      `👀 *PREVIEW — Installation Post*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${preview}\n\n━━━━━━━━━━━━━━━━━━━━━━━\nReply *CONFIRM* to ${s.data.schedule_type === 'immediate' ? 'publish' : 'schedule'} or *CANCEL* to discard.`,
       { parse_mode: 'Markdown' }
     );
     return true;
@@ -145,7 +149,7 @@ async function handleInstallationConfirm(ctx, bot) {
 
   if (text === 'CANCEL') {
     session.del('installation_confirm', userId);
-    await ctx.reply('Installation post discarded. No changes were made.');
+    await ctx.reply('❌ Installation post discarded. No changes were made.');
     return true;
   }
 
@@ -172,11 +176,16 @@ async function publishInstallation(ctx, bot, data) {
   const record = { ...data, created_at: new Date(), id: result.id };
   const post   = formatInstallationPost(record);
 
-  await ctx.reply('Publishing to community...');
+  await ctx.reply('📤 Publishing to community...');
 
   try {
     let sent;
-    if (data.photo_file_id) {
+    if (data.video_file_id) {
+      sent = await bot.telegram.sendVideo(process.env.COMMUNITY_CHAT_ID, data.video_file_id, {
+        caption: post,
+        parse_mode: 'Markdown',
+      });
+    } else if (data.photo_file_id) {
       sent = await bot.telegram.sendPhoto(process.env.COMMUNITY_CHAT_ID, data.photo_file_id, {
         caption: post,
         parse_mode: 'Markdown',
@@ -187,10 +196,10 @@ async function publishInstallation(ctx, bot, data) {
       });
     }
     db.updateInstallationMessageId(record.id, sent.message_id);
-    await ctx.reply('Installation post published successfully.');
+    await ctx.reply('✅ Installation post published successfully.');
   } catch (err) {
     console.error('[installation] Post failed:', err.message);
-    await ctx.reply('Installation saved, but posting to community failed. Check bot permissions.');
+    await ctx.reply('⚠️ Installation saved, but posting to community failed. Check bot permissions.');
   }
 }
 
@@ -203,7 +212,7 @@ async function scheduleInstallation(ctx, bot, data) {
   });
 
   const date = data.scheduled_at.toLocaleString('en-NG', { timeZone: process.env.TZ || 'Africa/Lagos' });
-  await ctx.reply(`Installation scheduled for *${date}*. It will be published automatically.`, {
+  await ctx.reply(`⏰ Installation scheduled for *${date}*. It will be published automatically.`, {
     parse_mode: 'Markdown',
   });
 }

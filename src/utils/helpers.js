@@ -80,37 +80,62 @@ function minutesAgo(date) {
   return hours === 1 ? '1 Hour Ago' : `${hours} Hours Ago`;
 }
 
+// ── Celebration emoji tiers ──────────────────────────────────
+
+/**
+ * Get celebration emojis based on installation system size.
+ * Small (1-3 kVA): Single celebration 👏
+ * Medium (5-10 kVA): Party celebration 🎉🎊
+ * Large (15+ kVA): Whale celebration 🎉🎉🎉🎊🎊✨✨🚀🐋
+ */
+function getCelebrationEmoji(systemSize) {
+  if (!systemSize || typeof systemSize !== 'string') return '👏';
+  const match = systemSize.match(/(\d+)\.?\d*/);
+  const size = match ? parseFloat(match[1]) : 0;
+  
+  if (size >= 15) {
+    return '🎉🎉🎉 🎊🎊 ✨✨ 🚀🐋';
+  } else if (size >= 5) {
+    return '🎉🎉 🎊🎊 ✨';
+  } else {
+    return '👏';
+  }
+}
+
 // ── Message formatters ────────────────────────────────────────
 
 function formatInstallationPost({ location, client_name, system_size, battery, battery_count, panels, panel_wattage, created_at }) {
   const time = minutesAgo(created_at || new Date());
+  const celebration = getCelebrationEmoji(system_size);
   return (
-    `*INSTALLATION COMPLETED*\n` +
+    `${celebration}\n\n` +
+    `✨ *INSTALLATION COMPLETED*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `A ${sanitize(system_size)} Solar Power System has been successfully installed.\n\n` +
-    `*Location:* ${sanitize(location)}\n` +
-    `*Client:* ${sanitize(client_name)}\n\n` +
-    `*System Details*\n` +
-    `  Inverter: ${sanitize(system_size)}\n` +
-    `  Battery: ${sanitize(battery)}${battery_count ? ` (${battery_count} units)` : ''}\n` +
-    `  Panels: ${panels} Units${panel_wattage ? ` @ ${sanitize(panel_wattage)}` : ''}\n\n` +
-    `*Completed:* ${time}\n\n` +
+    `📍 *Location:* ${sanitize(location)}\n` +
+    `👤 *Client:* ${sanitize(client_name)}\n\n` +
+    `⚙️ *System Details*\n` +
+    `  ⚡ Inverter: ${sanitize(system_size)}\n` +
+    `  🔋 Battery: ${sanitize(battery)}${battery_count ? ` (${battery_count} units)` : ''}\n` +
+    `  📊 Panels: ${panels} Units${panel_wattage ? ` @ ${sanitize(panel_wattage)}` : ''}\n\n` +
+    `⏱️ *Completed:* ${time}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `#Instollar #SolarInstallation #Nigeria`
+    `#Instollar #SolarInstallation #Nigeria\n\n` +
+    `${celebration}`
   );
 }
 
 function formatGigPost({ location, timeline, system_size, battery, panels }) {
   return (
-    `*NEW INSTALLATION GIG*\n` +
+    `💼 *NEW INSTALLATION GIG*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `An installation opportunity is now available.\n\n` +
-    `*Location:* ${sanitize(location)}\n\n` +
-    `*Scope of Work*\n` +
-    `  Inverter: ${sanitize(system_size)}\n` +
-    `  Battery: ${sanitize(battery)}\n` +
-    `  Panels: ${panels} Units\n\n` +
-    `*Deadline:* ${sanitize(timeline)}\n\n` +
+    `📍 *Location:* ${sanitize(location)}\n\n` +
+    `⚙️ *Scope of Work*\n` +
+    `  ⚡ Inverter: ${sanitize(system_size)}\n` +
+    `  🔋 Battery: ${sanitize(battery)}\n` +
+    `  📊 Panels: ${panels} Units\n\n` +
+    `⏰ *Deadline:* ${sanitize(timeline)}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Qualified installers should express interest below.\n\n` +
     `#Instollar #SolarGig #Nigeria`
@@ -121,14 +146,14 @@ function formatApplicationAlert({ full_name, phone, email, username, gig_locatio
   const time   = formatTime(created_at ? new Date(created_at) : new Date());
   const handle = username ? `@${sanitize(username, 50)}` : 'No username';
   return (
-    `*NEW GIG APPLICATION*\n` +
+    `👥 *NEW GIG APPLICATION*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `*Name:* ${sanitize(full_name)}\n` +
-    `*Phone:* ${sanitize(phone, 20)}\n` +
-    `*Email:* ${sanitize(email)}\n` +
-    `*Applied For:* ${sanitize(gig_location)}\n` +
-    `*Time:* ${time}\n` +
-    `*Telegram:* ${handle}\n\n` +
+    `👤 *Name:* ${sanitize(full_name)}\n` +
+    `📱 *Phone:* ${sanitize(phone, 20)}\n` +
+    `✉️ *Email:* ${sanitize(email)}\n` +
+    `📍 *Applied For:* ${sanitize(gig_location)}\n` +
+    `⏰ *Time:* ${time}\n` +
+    `💬 *Telegram:* ${handle}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Verify this installer on the Instollar platform before assignment.`
   );
@@ -136,13 +161,13 @@ function formatApplicationAlert({ full_name, phone, email, username, gig_locatio
 
 function formatDailySummary({ installations, gigs, applications }) {
   return (
-    `*INSTOLLAR DAILY SUMMARY*\n` +
+    `📊 *INSTOLLAR DAILY SUMMARY*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `${formatDate()}\n\n` +
-    `*Today's Activity*\n\n` +
-    `  Installations Shared: ${installations}\n` +
-    `  New Gigs Posted: ${gigs}\n` +
-    `  Engineer Applications: ${applications}\n\n` +
+    `📈 *Today's Activity*\n\n` +
+    `  ✅ Installations Shared: ${installations}\n` +
+    `  💼 New Gigs Posted: ${gigs}\n` +
+    `  👥 Engineer Applications: ${applications}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Thank you for being part of the Instollar Community.\n\n` +
     `#Instollar #SolarNigeria`
@@ -187,6 +212,7 @@ module.exports = {
   formatTime,
   formatDate,
   minutesAgo,
+  getCelebrationEmoji,
   formatInstallationPost,
   formatGigPost,
   formatApplicationAlert,
