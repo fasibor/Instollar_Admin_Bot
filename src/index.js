@@ -100,10 +100,37 @@ async function main() {
   });
 
   // ── Photo chain ────────────────────────────────────────────
+  // File size limit: 5MB for installation/announce uploads
   bot.on('photo', async (ctx) => {
+    const photoSize = ctx.message.photo[ctx.message.photo.length - 1].file_size;
+    const MAX_PHOTO_SIZE = 5 * 1024 * 1024; // 5MB
+    
+    if (photoSize > MAX_PHOTO_SIZE) {
+      return ctx.reply(`📸 Photo too large (${(photoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 5MB.`);
+    }
+    
     const chain = [
+      () => handleInstallationWizard(ctx, bot),
       () => handlePhotoPost(ctx, bot),
       () => handleAnnouncePhoto(ctx, bot),
+    ];
+    for (const fn of chain) {
+      if (await fn()) return;
+    }
+  });
+
+  // ── Video chain ────────────────────────────────────────────
+  // File size limit: 50MB for installation/announce uploads
+  bot.on('video', async (ctx) => {
+    const videoSize = ctx.message.video.file_size;
+    const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50MB
+    
+    if (videoSize > MAX_VIDEO_SIZE) {
+      return ctx.reply(`🎥 Video too large (${(videoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 50MB.`);
+    }
+    
+    const chain = [
+      () => handleInstallationWizard(ctx, bot),
     ];
     for (const fn of chain) {
       if (await fn()) return;

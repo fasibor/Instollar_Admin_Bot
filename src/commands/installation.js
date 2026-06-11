@@ -12,6 +12,8 @@ const db      = require('../database/db');
 
 const STEPS = ['location', 'client_name', 'system_size', 'battery', 'battery_count', 'panels', 'panel_wattage', 'media', 'schedule'];
 const MAX   = { location: 100, client_name: 100, system_size: 30, battery: 30, battery_count: 3, panel_wattage: 20 };
+const MAX_PHOTO_SIZE = 5 * 1024 * 1024;   // 5MB
+const MAX_VIDEO_SIZE = 50 * 1024 * 1024;  // 50MB
 
 const PROMPTS = {
   location:      '📍 *Step 1 of 9* — Enter the *location*:\n_(e.g. Lekki, Lagos)_',
@@ -53,13 +55,32 @@ async function handleInstallationWizard(ctx, bot) {
     } else if (ctx.message?.photo) {
       const photos = ctx.message.photo;
       const largestPhoto = photos[photos.length - 1];
+      const photoSize = largestPhoto.file_size;
+      
+      if (photoSize && photoSize > MAX_PHOTO_SIZE) {
+        await ctx.reply(`📸 Photo too large (${(photoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 5MB. Please send a smaller image.`);
+        return true;
+      }
+      
       s.data.photo_file_id = largestPhoto.file_id;
+      s.data.video_file_id = null;
       await ctx.reply('✅ Photo received! Continuing...');
     } else if (ctx.message?.video) {
+      const videoSize = ctx.message.video.file_size;
+      
+      if (videoSize && videoSize > MAX_VIDEO_SIZE) {
+        await ctx.reply(`🎥 Video too large (${(videoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 50MB. Please send a smaller video.`);
+        return true;
+      }
+      
       s.data.video_file_id = ctx.message.video.file_id;
+      s.data.photo_file_id = null;
       await ctx.reply('✅ Video received! Continuing...');
-    } else {
+    } else if (text) {
       await ctx.reply('📸 Please send a photo, video, or reply SKIP to continue without media.');
+      return true;
+    } else {
+      // Not text, photo, or video - some other message type, ignore
       return true;
     }
     
@@ -106,7 +127,7 @@ async function handleInstallationWizard(ctx, bot) {
     return true;
   }
 
-  const text        = ctx.message.text.trim();
+  const text        = ctx.message?.text?.trim();\n  \n  // If we don't have text at this point, it's likely a non-text message type\n  if (!text) {\n    await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });\n    return true;\n  }
 
   // Validate battery_count and panels as numbers
   if (currentStep === 'battery_count' || currentStep === 'panels') {
