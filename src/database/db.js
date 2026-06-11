@@ -1,261 +1,248 @@
 /**
- * Instollar Bot — Database Layer v1.2
+ * Instollar Bot — PostgreSQL Database Layer
  *
- * Fixes applied:
- *  R5  — flushSync now also registered on process 'exit' (covers uncaught exceptions)
- *  R7  — debounce setTimeout is .unref()-ed so it never delays graceful shutdown
- */
-/**
- * Instollar Bot — Database Layer v1.3
- *
- * Updates:
- *  - Removed daily stats system
- *  - Added weekly stats (7 days)
- *  - Added monthly stats (30 days)
- *  - Clean unified analytics using UNION ALL
+ * Migrated from SQLite to PostgreSQL for Railway compatibility
+ * and persistent data across restarts
  */
 
-const initSqlJs = require('sql.js');
-const path      = require('path');
-const fs        = require('fs');
+const { Pool } = require('pg');
 require('dotenv').config();
 
-const DB_PATH = process.env.DB_PATH || './data/instollar.db';
-const dir     = path.dirname(path.resolve(DB_PATH));
-if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+const DATABASE_URL = process.env.DATABASE_URL;
 
-let _db        = null;
-let _saveTimer = null;
-const SAVE_DEBOUNCE_MS = 2000;
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is not set');
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+pool.on('error', (err) => {
+  console.error('[DB] Pool error:', err);
+});
+
+let _initialized = false;
 
 // ─────────────────────────────────────────────
 // DB INIT
 // ─────────────────────────────────────────────
 
-function getDb() {
-  if (_db) return _db;
-  throw new Error('DB not initialised — call initDb() first');
-}
-
 async function initDb() {
-  const SQL = await initSqlJs();
+  if (_initialized) return;
 
-  _db = fs.existsSync(DB_PATH)
-    ? new SQL.Database(fs.readFileSync(DB_PATH))
-    : new SQL.Database();
+  const client = await pool.connect();
 
-  _db.run('PRAGMA foreign_keys = ON;');
+  try {
+    // Create installations table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS installations (
+        id SERIAL PRIMARY KEY,
+        location TEXT NOT NULL,
+        client_name TEXT NOT NULL,
+        system_size TEXT NOT NULL,
+        battery TEXT NOT NULL,
+        panels INTEGER NOT NULL,
+        posted_by BIGINT NOT NULL,
+        message_id BIGINT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
-  _db.run(`CREATE TABLE IF NOT EXISTS installations (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    location    TEXT NOT NULL,
-    client_name TEXT NOT NULL,
-    system_size TEXT NOT NULL,
-    battery     TEXT NOT NULL,
-    panels      INTEGER NOT NULL,
-    posted_by   INTEGER NOT NULL,
-    message_id  INTEGER,
-    created_at  DATETIME DEFAULT (datetime('now'))
-  );`);
+    // Create gigs table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS gigs (
+        id SERIAL PRIMARY KEY,
+        location TEXT NOT NULL,
+        timeline TEXT NOT NULL,
+        system_size TEXT NOT NULL,
+        battery TEXT NOT NULL,
+        panels INTEGER NOT NULL,
+        posted_by BIGINT NOT NULL,
+        message_id BIGINT,
+        status TEXT DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
-  _db.run(`CREATE TABLE IF NOT EXISTS gigs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    location    TEXT NOT NULL,
-    timeline    TEXT NOT NULL,
-    system_size TEXT NOT NULL,
-    battery     TEXT NOT NULL,
-    panels      INTEGER NOT NULL,
-    posted_by   INTEGER NOT NULL,
-    message_id  INTEGER,
-    status      TEXT DEFAULT 'open',
-    created_at  DATETIME DEFAULT (datetime('now'))
-  );`);
+    // Create applications table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS applications (
+        id SERIAL PRIMARY KEY,
+        gig_id INTEGER NOT NULL REFERENCES gigs(id),
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        email TEXT NOT NULL,
+        telegram_id BIGINT,
+        username TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
-  _db.run(`CREATE TABLE IF NOT EXISTS applications (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    gig_id       INTEGER NOT NULL,
-    full_name    TEXT NOT NULL,
-    phone        TEXT NOT NULL,
-    email        TEXT NOT NULL,
-    telegram_id  INTEGER,
-    username     TEXT,
-    created_at   DATETIME DEFAULT (datetime('now'))
-  );`);
+    // Create announcements table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS announcements (
+        id SERIAL PRIMARY KEY,
+        content TEXT NOT NULL,
+        posted_by BIGINT NOT NULL,
+        message_id BIGINT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
-  _db.run(`CREATE TABLE IF NOT EXISTS announcements (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    content    TEXT NOT NULL,
-    posted_by  INTEGER NOT NULL,
-    message_id INTEGER,
-    created_at DATETIME DEFAULT (datetime('now'))
-  );`);
-
-  scheduleSave();
-  console.log('[DB] Initialised:', DB_PATH);
-  return _db;
-}
-
-// ─────────────────────────────────────────────
-// PERSISTENCE
-// ─────────────────────────────────────────────
-
-function scheduleSave() {
-  if (_saveTimer) clearTimeout(_saveTimer);
-
-  _saveTimer = setTimeout(() => {
-    if (!_db) return;
-    try {
-      fs.writeFileSync(DB_PATH, Buffer.from(_db.export()));
-    } catch (err) {
-      console.error('[DB] Save failed:', err.message);
-    }
-    _saveTimer = null;
-  }, SAVE_DEBOUNCE_MS).unref();
-}
-
-function flushSync() {
-  if (!_db) return;
-  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-  try { fs.writeFileSync(DB_PATH, Buffer.from(_db.export())); } catch (_) {}
-}
-
-process.on('SIGINT',  flushSync);
-process.on('SIGTERM', flushSync);
-process.on('exit',    flushSync);
-
-// ─────────────────────────────────────────────
-// CORE HELPERS
-// ─────────────────────────────────────────────
-
-function run(sql, params = []) {
-  const db = getDb();
-  db.run(sql, params);
-
-  const id = db.exec('SELECT last_insert_rowid() as id')[0];
-  const lastId = id ? id.values[0][0] : null;
-
-  scheduleSave();
-  return { lastInsertRowid: lastId };
-}
-
-function get(sql, params = []) {
-  const db  = getDb();
-  const res = db.exec(sql, params);
-  if (!res[0]) return null;
-
-  const cols = res[0].columns;
-  const vals = res[0].values[0];
-  if (!vals) return null;
-
-  return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    _initialized = true;
+    console.log('[DB] PostgreSQL initialised and ready');
+  } catch (err) {
+    console.error('[DB] Initialisation error:', err);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ─────────────────────────────────────────────
 // INSTALLATIONS
 // ─────────────────────────────────────────────
 
-function insertInstallation(data) {
-  return run(
-    'INSERT INTO installations (location,client_name,system_size,battery,panels,posted_by) VALUES (?,?,?,?,?,?)',
+async function insertInstallation(data) {
+  const result = await pool.query(
+    `INSERT INTO installations (location, client_name, system_size, battery, panels, posted_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [data.location, data.client_name, data.system_size, data.battery, data.panels, data.posted_by]
   );
+  return result.rows[0];
 }
 
-function updateInstallationMessageId(id, message_id) {
-  run('UPDATE installations SET message_id=? WHERE id=?', [message_id, id]);
+async function updateInstallationMessageId(id, message_id) {
+  await pool.query(
+    'UPDATE installations SET message_id = $1 WHERE id = $2',
+    [message_id, id]
+  );
 }
 
 // ─────────────────────────────────────────────
 // GIGS
 // ─────────────────────────────────────────────
 
-function insertGig(data) {
-  return run(
-    'INSERT INTO gigs (location,timeline,system_size,battery,panels,posted_by) VALUES (?,?,?,?,?,?)',
+async function insertGig(data) {
+  const result = await pool.query(
+    `INSERT INTO gigs (location, timeline, system_size, battery, panels, posted_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [data.location, data.timeline, data.system_size, data.battery, data.panels, data.posted_by]
+  );
+  return result.rows[0];
+}
+
+async function updateGigMessageId(id, message_id) {
+  await pool.query(
+    'UPDATE gigs SET message_id = $1 WHERE id = $2',
+    [message_id, id]
   );
 }
 
-function updateGigMessageId(id, message_id) {
-  run('UPDATE gigs SET message_id=? WHERE id=?', [message_id, id]);
-}
-
-function getGigById(id) {
-  return get('SELECT * FROM gigs WHERE id=?', [id]);
+async function getGigById(id) {
+  const result = await pool.query(
+    'SELECT * FROM gigs WHERE id = $1',
+    [id]
+  );
+  return result.rows[0] || null;
 }
 
 // ─────────────────────────────────────────────
 // APPLICATIONS
 // ─────────────────────────────────────────────
 
-function insertApplication(data) {
-  return run(
-    'INSERT INTO applications (gig_id,full_name,phone,email,telegram_id,username) VALUES (?,?,?,?,?,?)',
+async function insertApplication(data) {
+  const result = await pool.query(
+    `INSERT INTO applications (gig_id, full_name, phone, email, telegram_id, username)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [data.gig_id, data.full_name, data.phone, data.email, data.telegram_id, data.username]
   );
+  return result.rows[0];
 }
 
-function hasApplied(gig_id, telegram_id) {
-  return !!get('SELECT id FROM applications WHERE gig_id=? AND telegram_id=?', [gig_id, telegram_id]);
+async function hasApplied(gig_id, telegram_id) {
+  const result = await pool.query(
+    'SELECT id FROM applications WHERE gig_id = $1 AND telegram_id = $2',
+    [gig_id, telegram_id]
+  );
+  return result.rows.length > 0;
 }
 
 // ─────────────────────────────────────────────
-// STATS (WEEKLY / MONTHLY ONLY)
+// STATS (WEEKLY / MONTHLY)
 // ─────────────────────────────────────────────
 
-function getWeeklyStats() {
-  const db = getDb();
-
-  const res = db.exec(`
+async function getWeeklyStats() {
+  const result = await pool.query(`
     SELECT
-      SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END) AS installations,
-      SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END) AS gigs,
-      SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END) AS applications
+      COALESCE(SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END), 0) AS installations,
+      COALESCE(SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END), 0) AS gigs,
+      COALESCE(SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END), 0) AS applications
     FROM (
       SELECT 'installation' AS type, created_at FROM installations
       UNION ALL
       SELECT 'gig' AS type, created_at FROM gigs
       UNION ALL
       SELECT 'application' AS type, created_at FROM applications
-    )
-    WHERE datetime(created_at) >= datetime('now', '-7 days')
+    ) AS stats
+    WHERE created_at >= NOW() - INTERVAL '7 days'
   `);
 
-  const row = res[0]?.values?.[0] || [];
-
+  const row = result.rows[0];
   return {
-    installations: row[0] || 0,
-    gigs: row[1] || 0,
-    applications: row[2] || 0,
+    installations: parseInt(row.installations) || 0,
+    gigs: parseInt(row.gigs) || 0,
+    applications: parseInt(row.applications) || 0,
   };
 }
 
-function getMonthlyStats() {
-  const db = getDb();
-
-  const res = db.exec(`
+async function getMonthlyStats() {
+  const result = await pool.query(`
     SELECT
-      SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END) AS installations,
-      SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END) AS gigs,
-      SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END) AS applications
+      COALESCE(SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END), 0) AS installations,
+      COALESCE(SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END), 0) AS gigs,
+      COALESCE(SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END), 0) AS applications
     FROM (
       SELECT 'installation' AS type, created_at FROM installations
       UNION ALL
       SELECT 'gig' AS type, created_at FROM gigs
       UNION ALL
       SELECT 'application' AS type, created_at FROM applications
-    )
-    WHERE datetime(created_at) >= datetime('now', '-30 days')
+    ) AS stats
+    WHERE created_at >= NOW() - INTERVAL '30 days'
   `);
 
-  const row = res[0]?.values?.[0] || [];
-
+  const row = result.rows[0];
   return {
-    installations: row[0] || 0,
-    gigs: row[1] || 0,
-    applications: row[2] || 0,
+    installations: parseInt(row.installations) || 0,
+    gigs: parseInt(row.gigs) || 0,
+    applications: parseInt(row.applications) || 0,
   };
 }
+
+// ─────────────────────────────────────────────
+// GRACEFUL SHUTDOWN
+// ─────────────────────────────────────────────
+
+async function flushSync() {
+  try {
+    await pool.end();
+    console.log('[DB] Connection pool closed');
+  } catch (err) {
+    console.error('[DB] Error closing pool:', err);
+  }
+}
+
+process.on('SIGINT', flushSync);
+process.on('SIGTERM', flushSync);
+process.on('exit', flushSync);
 
 // ─────────────────────────────────────────────
 // EXPORTS
@@ -275,10 +262,13 @@ module.exports = {
   insertApplication,
   hasApplied,
 
-  insertAnnouncement: (data) =>
-    run('INSERT INTO announcements (content,posted_by) VALUES (?,?)',
+  insertAnnouncement: async (data) => {
+    const result = await pool.query(
+      'INSERT INTO announcements (content, posted_by) VALUES ($1, $2) RETURNING id',
       [data.content, data.posted_by]
-    ),
+    );
+    return result.rows[0];
+  },
 
   getWeeklyStats,
   getMonthlyStats,
