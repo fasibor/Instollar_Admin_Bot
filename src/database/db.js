@@ -65,17 +65,22 @@ async function initDb() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS gigs (
         id SERIAL PRIMARY KEY,
+        gig_type TEXT NOT NULL DEFAULT 'Installation',
         location TEXT NOT NULL,
         timeline TEXT NOT NULL,
-        system_size TEXT NOT NULL,
-        battery TEXT NOT NULL,
-        panels INTEGER NOT NULL,
+        scope TEXT,
+        inverter_count INTEGER,
+        battery_count INTEGER,
+        panel_wattage TEXT,
+        system_size TEXT,
+        battery TEXT,
+        panels INTEGER,
         posted_by BIGINT NOT NULL,
         message_id BIGINT,
         status TEXT DEFAULT 'open',
         created_at TIMESTAMP DEFAULT NOW()
       );
-    `);
+    `)
 
     // Create applications table
     await client.query(`
@@ -153,10 +158,10 @@ async function updateInstallationMessageId(id, message_id) {
 
 async function insertGig(data) {
   const result = await pool.query(
-    `INSERT INTO gigs (location, timeline, system_size, battery, panels, posted_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO gigs (gig_type, location, timeline, scope, inverter_count, battery_count, panel_wattage, system_size, battery, panels, posted_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
-    [data.location, data.timeline, data.system_size, data.battery, data.panels, data.posted_by]
+    [data.gig_type || 'Installation', data.location, data.timeline, data.scope, data.inverter_count, data.battery_count, data.panel_wattage, data.system_size, data.battery, data.panels, data.posted_by]
   );
   return result.rows[0];
 }

@@ -125,19 +125,37 @@ function formatInstallationPost({ location, client_name, system_size, battery, b
   );
 }
 
-function formatGigPost({ location, timeline, system_size, battery, panels }) {
+function formatGigPost({ gig_type = 'Installation', location, timeline, scope, inverter_count, battery_count, panel_wattage, system_size, battery, panels }) {
+  let scopeDetails = '';
+  
+  if (gig_type === 'Installation') {
+    scopeDetails = (
+      `⚙️ *Scope of Work*\n` +
+      `  ⚡ Inverters: ${inverter_count} Unit${inverter_count !== 1 ? 's' : ''}\n` +
+      `  🔋 Batteries: ${battery_count} Unit${battery_count !== 1 ? 's' : ''}\n` +
+      `  📊 Panels: ${panel_wattage}\n\n`
+    );
+  } else if (['Energy Audit', 'Business Audit', 'Decommissioning', 'Battery Replacement', 'Solar Panel Replacement', 'MPPT Removal'].includes(gig_type)) {
+    scopeDetails = (
+      `⚙️ *Scope of Work*\n` +
+      `  ${scope}\n\n`
+    );
+  } else {
+    scopeDetails = (
+      `⚙️ *Details*\n` +
+      `  ${scope}\n\n`
+    );
+  }
+  
   return (
-    `💼 *NEW INSTALLATION GIG*\n` +
+    `💼 *NEW GIG — ${sanitize(gig_type, 50)}*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `An installation opportunity is now available.\n\n` +
+    `A new opportunity is now available.\n\n` +
     `📍 *Location:* ${sanitize(location)}\n\n` +
-    `⚙️ *Scope of Work*\n` +
-    `  ⚡ Inverter: ${sanitize(system_size)}\n` +
-    `  🔋 Battery: ${sanitize(battery)}\n` +
-    `  📊 Panels: ${panels} Units\n\n` +
+    scopeDetails +
     `⏰ *Deadline:* ${sanitize(timeline)}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `Qualified installers should express interest below.\n\n` +
+    `Qualified professionals should express interest below.\n\n` +
     `#Instollar #SolarGig #Nigeria`
   );
 }
