@@ -27,10 +27,11 @@ const { startDailySummaryScheduler }                                          = 
 
 // ── Validate required env vars ────────────────────────────────
 
-const REQUIRED = ['BOT_TOKEN', 'COMMUNITY_CHAT_ID', 'ADMIN_GROUP_ID', 'ADMIN_IDS'];
+const REQUIRED = ['BOT_TOKEN', 'COMMUNITY_CHAT_ID', 'ADMIN_GROUP_ID', 'ADMIN_IDS', 'DATABASE_URL'];
 for (const key of REQUIRED) {
   if (!process.env[key]) {
-    console.error(`FATAL: Missing environment variable: ${key}`);
+    console.error(`[Fatal] Missing environment variable: ${key}`);
+    console.error(`Available variables: ${Object.keys(process.env).filter(k => k.startsWith('BOT') || k.includes('CHAT') || k.includes('DATABASE')).join(', ')}`);
     process.exit(1);
   }
 }

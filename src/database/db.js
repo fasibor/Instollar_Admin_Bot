@@ -21,9 +21,11 @@ async function initDb() {
   const DATABASE_URL = process.env.DATABASE_URL;
 
   if (!DATABASE_URL) {
+    console.error('[DB] DATABASE_URL not set. Available env vars:', Object.keys(process.env).filter(k => k.includes('DATABASE') || k.includes('POSTGRES') || k.includes('RAILWAY')));
     throw new Error('DATABASE_URL environment variable is not set');
   }
 
+  console.log('[DB] Connecting to PostgreSQL...');
   pool = new Pool({
     connectionString: DATABASE_URL,
     ssl: {
@@ -234,8 +236,10 @@ async function getMonthlyStats() {
 
 async function flushSync() {
   try {
-    await pool.end();
-    console.log('[DB] Connection pool closed');
+    if (pool) {
+      await pool.end();
+      console.log('[DB] Connection pool closed');
+    }
   } catch (err) {
     console.error('[DB] Error closing pool:', err);
   }
