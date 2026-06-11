@@ -127,7 +127,13 @@ async function handleInstallationWizard(ctx, bot) {
     return true;
   }
 
-  const text        = ctx.message?.text?.trim();\n  \n  // If we don't have text at this point, it's likely a non-text message type\n  if (!text) {\n    await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });\n    return true;\n  }
+  const text        = ctx.message?.text?.trim();
+
+  // If we don't have text at this point, it's likely a non-text message type
+  if (!text) {
+    await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });
+    return true;
+  }
 
   // Validate battery_count and panels as numbers
   if (currentStep === 'battery_count' || currentStep === 'panels') {
