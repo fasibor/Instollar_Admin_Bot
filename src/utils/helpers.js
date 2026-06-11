@@ -82,7 +82,7 @@ function minutesAgo(date) {
 
 // ── Message formatters ────────────────────────────────────────
 
-function formatInstallationPost({ location, client_name, system_size, battery, panels, created_at }) {
+function formatInstallationPost({ location, client_name, system_size, battery, battery_count, panels, panel_wattage, created_at }) {
   const time = minutesAgo(created_at || new Date());
   return (
     `*INSTALLATION COMPLETED*\n` +
@@ -92,8 +92,8 @@ function formatInstallationPost({ location, client_name, system_size, battery, p
     `*Client:* ${sanitize(client_name)}\n\n` +
     `*System Details*\n` +
     `  Inverter: ${sanitize(system_size)}\n` +
-    `  Battery: ${sanitize(battery)}\n` +
-    `  Panels: ${panels} Units\n\n` +
+    `  Battery: ${sanitize(battery)}${battery_count ? ` (${battery_count} units)` : ''}\n` +
+    `  Panels: ${panels} Units${panel_wattage ? ` @ ${sanitize(panel_wattage)}` : ''}\n\n` +
     `*Completed:* ${time}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `#Instollar #SolarInstallation #Nigeria`

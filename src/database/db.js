@@ -48,9 +48,14 @@ async function initDb() {
         client_name TEXT NOT NULL,
         system_size TEXT NOT NULL,
         battery TEXT NOT NULL,
+        battery_count INTEGER,
         panels INTEGER NOT NULL,
+        panel_wattage TEXT,
+        photo_file_id TEXT,
         posted_by BIGINT NOT NULL,
         message_id BIGINT,
+        scheduled_at TIMESTAMP,
+        is_scheduled BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
@@ -92,6 +97,20 @@ async function initDb() {
         content TEXT NOT NULL,
         posted_by BIGINT NOT NULL,
         message_id BIGINT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Create scheduled_posts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS scheduled_posts (
+        id SERIAL PRIMARY KEY,
+        post_type TEXT NOT NULL,
+        post_data JSONB NOT NULL,
+        scheduled_at TIMESTAMP NOT NULL,
+        posted_by BIGINT NOT NULL,
+        message_id BIGINT,
+        published BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
@@ -231,6 +250,36 @@ async function getMonthlyStats() {
 }
 
 // ─────────────────────────────────────────────
+// SCHEDULED POSTS
+// ─────────────────────────────────────────────
+
+async function insertScheduledPost(data) {
+  const result = await pool.query(
+    `INSERT INTO scheduled_posts (post_type, post_data, scheduled_at, posted_by)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [data.post_type, JSON.stringify(data.post_data), data.scheduled_at, data.posted_by]
+  );
+  return result.rows[0];
+}
+
+async function getScheduledPosts(limit = 100) {
+  const result = await pool.query(
+    `SELECT * FROM scheduled_posts WHERE published = FALSE AND scheduled_at <= NOW()
+     ORDER BY scheduled_at ASC LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}
+
+async function markScheduledPostPublished(id, message_id) {
+  await pool.query(
+    'UPDATE scheduled_posts SET published = TRUE, message_id = $1 WHERE id = $2',
+    [message_id, id]
+  );
+}
+
+// ─────────────────────────────────────────────
 // GRACEFUL SHUTDOWN
 // ─────────────────────────────────────────────
 
@@ -274,6 +323,10 @@ module.exports = {
     );
     return result.rows[0];
   },
+
+  insertScheduledPost,
+  getScheduledPosts,
+  markScheduledPostPublished,
 
   getWeeklyStats,
   getMonthlyStats,
