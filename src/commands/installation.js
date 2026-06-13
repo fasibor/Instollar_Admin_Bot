@@ -1,9 +1,16 @@
 /**
- * Instollar Bot — /installation Command  v1.2
+ * Instollar Bot — /installation Command  v1.3
  *
- * Fixes applied:
- *  R1 — Removed dead /cancel text checks inside wizard (global command handles it)
- *  R2 — Confirm handler now sends guidance on unexpected input instead of silently ignoring
+ * BUGS FIXED:
+ *  BUG-6: db.insertInstallation() and db.insertScheduledPost() are async
+ *          (PostgreSQL) but were not awaited — result.id was undefined,
+ *          crashing updateInstallationMessageId.
+ *  BUG-7: formatInstallationPost() now produces emoji-heavy posts that can
+ *          exceed Telegram's 1024-char photo/video caption limit. Caption is
+ *          now truncated safely before sending as photo/video.
+ *  BUG-8: media step handler returned true without advancing step when
+ *          it received an unrecognised message type, and separately when
+ *          text was empty, causing the wizard to get stuck on Step 8 forever.
  */
 
 const { isAdmin, formatInstallationPost } = require('../utils/helpers');
@@ -12,8 +19,9 @@ const db      = require('../database/db');
 
 const STEPS = ['location', 'client_name', 'system_size', 'battery', 'battery_count', 'panels', 'panel_wattage', 'media', 'schedule'];
 const MAX   = { location: 100, client_name: 100, system_size: 30, battery: 30, battery_count: 3, panel_wattage: 20 };
-const MAX_PHOTO_SIZE = 5 * 1024 * 1024;   // 5MB
-const MAX_VIDEO_SIZE = 50 * 1024 * 1024;  // 50MB
+const MAX_PHOTO_SIZE   = 5  * 1024 * 1024;  // 5 MB
+const MAX_VIDEO_SIZE   = 50 * 1024 * 1024;  // 50 MB
+const MAX_CAPTION_LEN  = 950;               // safe under Telegram's 1024-char caption limit
 
 const PROMPTS = {
   location:      '📍 *Step 1 of 9* — Enter the *location*:\n_(e.g. Lekki, Lagos)_',
@@ -29,7 +37,7 @@ const PROMPTS = {
 
 function registerInstallationCommand(bot) {
   bot.command('installation', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return ctx.reply('This command is restricted to administrators.');
+    if (!isAdmin(ctx.from?.id)) return ctx.reply('This command is restricted to administrators.');
     session.set('installation', ctx.from.id, { step: 0, data: {} });
     await ctx.reply(
       '✨ *NEW INSTALLATION — Setup*\n\nYou are creating an installation announcement.\nType /cancel at any time to abort.\n\n' + PROMPTS.location,
@@ -39,84 +47,83 @@ function registerInstallationCommand(bot) {
 }
 
 async function handleInstallationWizard(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('installation', userId);
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const s = session.get('installation', userId);
   if (!s) return false;
 
   const currentStep = STEPS[s.step];
 
-  // Handle media step (accepts photo, video, or SKIP)
+  // ── Media step ─────────────────────────────────────────────
   if (currentStep === 'media') {
     const text = ctx.message?.text?.trim().toUpperCase();
-    
+
     if (text === 'SKIP') {
       s.data.photo_file_id = null;
       s.data.video_file_id = null;
     } else if (ctx.message?.photo) {
-      const photos = ctx.message.photo;
-      const largestPhoto = photos[photos.length - 1];
-      const photoSize = largestPhoto.file_size;
-      
+      const largest   = ctx.message.photo[ctx.message.photo.length - 1];
+      const photoSize = largest.file_size;
       if (photoSize && photoSize > MAX_PHOTO_SIZE) {
-        await ctx.reply(`📸 Photo too large (${(photoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 5MB. Please send a smaller image.`);
+        await ctx.reply(`📸 Photo too large (${(photoSize / 1024 / 1024).toFixed(1)}MB). Maximum: 5MB.`);
         return true;
       }
-      
-      s.data.photo_file_id = largestPhoto.file_id;
+      s.data.photo_file_id = largest.file_id;
       s.data.video_file_id = null;
       await ctx.reply('✅ Photo received! Continuing...');
     } else if (ctx.message?.video) {
       const videoSize = ctx.message.video.file_size;
-      
       if (videoSize && videoSize > MAX_VIDEO_SIZE) {
-        await ctx.reply(`🎥 Video too large (${(videoSize / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 50MB. Please send a smaller video.`);
+        await ctx.reply(`🎥 Video too large (${(videoSize / 1024 / 1024).toFixed(1)}MB). Maximum: 50MB.`);
         return true;
       }
-      
       s.data.video_file_id = ctx.message.video.file_id;
       s.data.photo_file_id = null;
       await ctx.reply('✅ Video received! Continuing...');
-    } else if (text) {
-      await ctx.reply('📸 Please send a photo, video, or reply SKIP to continue without media.');
-      return true;
     } else {
-      // Not text, photo, or video - some other message type, ignore
+      // FIX BUG-8: was silently consuming non-text/photo/video messages without
+      // advancing or telling the user what to do.
+      await ctx.reply('📸 Please send a *photo*, *video*, or type *SKIP* to continue without media.', {
+        parse_mode: 'Markdown',
+      });
       return true;
     }
-    
+
+    // Advance to next step
     s.step += 1;
     await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });
     return true;
   }
 
-  // Handle schedule step
+  // ── Schedule step ───────────────────────────────────────────
   if (currentStep === 'schedule') {
-    const text = ctx.message.text.trim().toUpperCase();
-    
-    if (text === 'IMMEDIATE') {
+    const text = ctx.message?.text?.trim();
+    if (!text) {
+      await ctx.reply(PROMPTS.schedule, { parse_mode: 'Markdown' });
+      return true;
+    }
+
+    if (text.toUpperCase() === 'IMMEDIATE') {
       s.data.schedule_type = 'immediate';
     } else {
-      // Try to parse datetime
-      const dateMatch = ctx.message.text.trim().match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+      const dateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
       if (dateMatch) {
-        const [_, year, month, day, hour, minute] = dateMatch;
+        const [, year, month, day, hour, minute] = dateMatch;
         const scheduledDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:00`);
-        if (scheduledDate < new Date()) {
-          await ctx.reply('Scheduled time must be in the future. Please try again.');
+        if (isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+          await ctx.reply('Scheduled time must be a valid future date. Please try again.');
           return true;
         }
         s.data.schedule_type = 'scheduled';
-        s.data.scheduled_at = scheduledDate;
+        s.data.scheduled_at  = scheduledDate;
       } else {
         await ctx.reply('Invalid format. Reply IMMEDIATE or use YYYY-MM-DD HH:MM format.');
         return true;
       }
     }
-    
-    // All steps done
-    s.step += 1;
+
     session.del('installation', userId);
-    
     const preview = formatInstallationPost({ ...s.data, created_at: new Date() });
     session.set('installation_confirm', userId, { data: s.data });
 
@@ -127,15 +134,13 @@ async function handleInstallationWizard(ctx, bot) {
     return true;
   }
 
-  const text        = ctx.message?.text?.trim();
-
-  // If we don't have text at this point, it's likely a non-text message type
+  // ── Regular text steps ──────────────────────────────────────
+  const text = ctx.message?.text?.trim();
   if (!text) {
     await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });
     return true;
   }
 
-  // Validate battery_count and panels as numbers
   if (currentStep === 'battery_count' || currentStep === 'panels') {
     const n = parseInt(text, 10);
     if (isNaN(n) || n < 1 || n > 10000) {
@@ -161,15 +166,15 @@ async function handleInstallationWizard(ctx, bot) {
 
   if (s.step < STEPS.length) {
     await ctx.reply(PROMPTS[STEPS[s.step]], { parse_mode: 'Markdown' });
-    return true;
   }
-
   return true;
 }
 
 async function handleInstallationConfirm(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('installation_confirm', userId);
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const s = session.get('installation_confirm', userId);
   if (!s) return false;
 
   const text = ctx.message.text.trim().toUpperCase();
@@ -182,7 +187,6 @@ async function handleInstallationConfirm(ctx, bot) {
 
   if (text === 'CONFIRM') {
     session.del('installation_confirm', userId);
-    
     if (s.data.schedule_type === 'immediate') {
       await publishInstallation(ctx, bot, s.data);
     } else {
@@ -191,7 +195,6 @@ async function handleInstallationConfirm(ctx, bot) {
     return true;
   }
 
-  // FIX R2: Give clear guidance instead of silently ignoring unexpected input
   await ctx.reply('Please reply with *CONFIRM* to proceed or *CANCEL* to discard.', {
     parse_mode: 'Markdown',
   });
@@ -199,7 +202,8 @@ async function handleInstallationConfirm(ctx, bot) {
 }
 
 async function publishInstallation(ctx, bot, data) {
-  const result = db.insertInstallation({ ...data, posted_by: ctx.from.id });
+  // FIX BUG-6: await the async PostgreSQL insert
+  const result = await db.insertInstallation({ ...data, posted_by: ctx.from.id });
   const record = { ...data, created_at: new Date(), id: result.id };
   const post   = formatInstallationPost(record);
 
@@ -208,13 +212,16 @@ async function publishInstallation(ctx, bot, data) {
   try {
     let sent;
     if (data.video_file_id) {
+      // FIX BUG-7: caption must be ≤ 1024 chars
+      const caption = post.slice(0, MAX_CAPTION_LEN);
       sent = await bot.telegram.sendVideo(process.env.COMMUNITY_CHAT_ID, data.video_file_id, {
-        caption: post,
+        caption,
         parse_mode: 'Markdown',
       });
     } else if (data.photo_file_id) {
+      const caption = post.slice(0, MAX_CAPTION_LEN);
       sent = await bot.telegram.sendPhoto(process.env.COMMUNITY_CHAT_ID, data.photo_file_id, {
-        caption: post,
+        caption,
         parse_mode: 'Markdown',
       });
     } else {
@@ -222,7 +229,8 @@ async function publishInstallation(ctx, bot, data) {
         parse_mode: 'Markdown',
       });
     }
-    db.updateInstallationMessageId(record.id, sent.message_id);
+    // FIX BUG-6: await this too
+    await db.updateInstallationMessageId(record.id, sent.message_id);
     await ctx.reply('✅ Installation post published successfully.');
   } catch (err) {
     console.error('[installation] Post failed:', err.message);
@@ -231,11 +239,12 @@ async function publishInstallation(ctx, bot, data) {
 }
 
 async function scheduleInstallation(ctx, bot, data) {
+  // FIX BUG-6: await the async PostgreSQL insert
   await db.insertScheduledPost({
-    post_type: 'installation',
-    post_data: data,
+    post_type:    'installation',
+    post_data:    data,
     scheduled_at: data.scheduled_at,
-    posted_by: ctx.from.id,
+    posted_by:    ctx.from.id,
   });
 
   const date = data.scheduled_at.toLocaleString('en-NG', { timeZone: process.env.TZ || 'Africa/Lagos' });

@@ -1,9 +1,11 @@
 /**
- * Instollar Bot — Gig Application Handler  v1.2
+ * Instollar Bot — Gig Application Handler  v1.3
  *
- * Fixes applied:
- *  R1  — Removed dead /cancel text check (global /cancel command handles it)
- *  R9  — canClick() now stamps timestamp only after all rejection checks pass
+ * BUGS FIXED:
+ *  BUG-3: db.hasApplied() and db.insertApplication() are async (PostgreSQL)
+ *          but were called without await — hasApplied always returned a Promise
+ *          (truthy), blocking every application attempt.
+ *  BUG-4: db.getGigById() also async — needs await.
  */
 
 const { formatApplicationAlert, isValidEmail, isValidPhone } = require('../utils/helpers');
@@ -20,25 +22,27 @@ const APP_PROMPTS = {
 
 function registerApplicationHandler(bot) {
   bot.action(/^apply_(\d+)$/, async (ctx) => {
-    const userId = ctx.from.id;
-    const gigId  = parseInt(ctx.match[1], 10);
+    const userId = ctx.from?.id;
+    if (!userId) return ctx.answerCbQuery('Unable to identify user.', { show_alert: true });
 
-    // Run all rejection checks BEFORE consuming the rate-limit slot (FIX R9)
-    if (db.hasApplied(gigId, userId)) {
+    const gigId = parseInt(ctx.match[1], 10);
+
+    // FIX BUG-3: await async hasApplied
+    if (await db.hasApplied(gigId, userId)) {
       return ctx.answerCbQuery('You have already applied for this gig.', { show_alert: true });
     }
 
-    const gig = db.getGigById(gigId);
+    // FIX BUG-4: await async getGigById
+    const gig = await db.getGigById(gigId);
     if (!gig) {
       return ctx.answerCbQuery('This gig is no longer available.', { show_alert: true });
     }
 
-    // Only now check + stamp the rate-limit (FIX R9)
+    // Rate-limit check (stamps only after all rejections pass)
     if (!session.canClick(userId)) {
       return ctx.answerCbQuery('Please wait a moment before clicking again.', { show_alert: false });
     }
 
-    // Single answerCbQuery call for the happy path (FIX R2 from previous pass)
     await ctx.answerCbQuery();
 
     session.set('application', userId, {
@@ -59,14 +63,15 @@ function registerApplicationHandler(bot) {
 }
 
 async function handleApplicationWizard(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('application', userId);
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const s = session.get('application', userId);
   if (!s) return false;
 
   const text        = ctx.message.text.trim();
   const currentStep = APP_STEPS[s.step];
 
-  // Validation per step
   if (currentStep === 'full_name') {
     if (text.length < 2 || text.length > 100) {
       await ctx.reply('Please enter your full name (2–100 characters).');
@@ -111,7 +116,8 @@ async function finalizeApplication(ctx, bot, s) {
   const { gigId, gigLocation, data } = s;
   const { from }                     = ctx;
 
-  db.insertApplication({
+  // FIX BUG-3: await async insertApplication
+  await db.insertApplication({
     gig_id:      gigId,
     full_name:   data.full_name,
     phone:       data.phone,

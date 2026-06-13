@@ -1,6 +1,10 @@
 /**
- * Instollar Bot — /stats Command
- * Shows today's activity to admins
+ * Instollar Bot — /stats Command  v1.1
+ *
+ * BUGS FIXED:
+ *  BUG-5: db.getWeeklyStats() and db.getMonthlyStats() are async (PostgreSQL)
+ *          but were called without await — stats was a Promise object, causing
+ *          "undefined" to appear in the output for all three numbers.
  */
 
 const { isAdmin, formatDate } = require('../utils/helpers');
@@ -8,24 +12,22 @@ const db = require('../database/db');
 
 function registerStatsCommand(bot) {
   bot.command('stats', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
+    if (!isAdmin(ctx.from?.id)) {
       return ctx.reply('This command is restricted to administrators.');
     }
 
-    const args = ctx.message.text.split(' ');
+    const args   = ctx.message.text.split(' ');
     const period = args[1];
 
-    let stats;
+    // FIX BUG-5: await the async PostgreSQL query
+    const stats = period === 'month'
+      ? await db.getMonthlyStats()
+      : await db.getWeeklyStats();
 
-    if (period === 'month') {
-      stats = db.getMonthlyStats();
-    } else {
-      // default = week
-      stats = db.getWeeklyStats();
-    }
+    const label = period === 'month' ? 'MONTHLY' : 'WEEKLY';
 
     await ctx.reply(
-      `*INSTOLLAR — ${period === 'month' ? 'MONTHLY' : 'WEEKLY'} Stats*\n` +
+      `*INSTOLLAR — ${label} Stats*\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `${formatDate()}\n\n` +
       `  Installations Shared: ${stats.installations}\n` +

@@ -71,13 +71,28 @@ function formatDate(date = new Date()) {
   });
 }
 
+/**
+ * Returns a human-readable timestamp for installation posts.
+ * Shows the actual time (e.g. "Today, 02:45 PM") rather than
+ * "Just Now" which becomes stale as the post ages in the group.
+ */
 function minutesAgo(date) {
-  const diff = Math.floor((Date.now() - new Date(date).getTime()) / 60000);
-  if (diff < 1) return 'Just Now';
-  if (diff === 1) return '1 Minute Ago';
-  if (diff < 60) return `${diff} Minutes Ago`;
-  const hours = Math.floor(diff / 60);
-  return hours === 1 ? '1 Hour Ago' : `${hours} Hours Ago`;
+  const d  = date ? new Date(date) : new Date();
+  const tz = process.env.TZ || 'Africa/Lagos';
+
+  const todayStr = new Date().toLocaleDateString('en-NG', { timeZone: tz });
+  const postStr  = d.toLocaleDateString('en-NG', { timeZone: tz });
+  const timeStr  = d.toLocaleTimeString('en-NG', {
+    hour: '2-digit', minute: '2-digit', hour12: true, timeZone: tz,
+  });
+
+  if (postStr === todayStr) return `Today, ${timeStr}`;
+
+  const dateStr = d.toLocaleDateString('en-NG', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: tz,
+  });
+  return `${dateStr} at ${timeStr}`;
+
 }
 
 // ── Celebration emoji tiers ──────────────────────────────────
