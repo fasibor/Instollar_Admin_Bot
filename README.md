@@ -28,7 +28,7 @@ Built for speed, clarity, and automation, it removes manual coordination overhea
 |------|------------|
 | Runtime | Node.js (v18+) |
 | Bot Framework | Telegraf v4 |
-| Database | SQLite (sql.js / file-based) |
+| Database | PostgreSQL|
 | Scheduler | node-cron |
 | Deployment | Railway|
 | Environment | dotenv |
