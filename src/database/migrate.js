@@ -88,13 +88,7 @@ const migrate = db.transaction(() => {
     );
   `);
 
-  // ─────────────────────────────────────────────
-  // 🚨 REMOVED: daily_stats table (no longer needed)
-  // ─────────────────────────────────────────────
 
-  // NOTE:
-  // Weekly and monthly stats are computed dynamically
-  // from installations/gigs/applications tables using date filters.
 
 });
 

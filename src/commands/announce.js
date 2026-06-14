@@ -1,133 +1,276 @@
 /**
- * Instollar Bot — /announce Command  v1.2
- *
- * Fixes applied:
- *  R1  — Removed dead /cancel text check (global /cancel handles it)
- *  R4  — Confirm handler now replies with guidance on unexpected input
- *  R8  — Photo caption capped at 900 chars (safe under Telegram's 1024-char limit
- *         after header + footer text is added; total will not exceed ~1020 chars)
+ * Instollar Bot — Announcement System
  */
 
-const { isAdmin, formatAnnouncement, sanitize } = require('../utils/helpers');
+const { isAdmin, sanitize } = require('../utils/helpers');
 const session = require('../utils/session');
-const db      = require('../database/db');
+const db = require('../database/db');
 
-const MAX_ANNOUNCE_TEXT = 2000; // for text-only announcements
-const MAX_PHOTO_CAPTION = 900;  // raw caption before header/footer added (~120 chars overhead)
+const MAX_TEXT = 2000;
+const MAX_CAPTION = 900;
 
+/* ─────────────────────────────
+   TYPES + EMOJIS
+───────────────────────────── */
+const TYPES = [
+  'ANNOUNCEMENT',
+  'BIRTHDAY',
+  'WEDDING',
+  'OPPORTUNITY',
+  'UPDATE',
+  'EVENT',
+  'OTHER'
+];
+
+const META = {
+  ANNOUNCEMENT: { emoji: '📢' },
+  BIRTHDAY: { emoji: '🎂' },
+  WEDDING: { emoji: '💍' },
+  OPPORTUNITY: { emoji: '💼' },
+  UPDATE: { emoji: '🔔' },
+  EVENT: { emoji: '📅' },
+  OTHER: { emoji: '✨' }
+};
+
+const getEmoji = (t) => META[t]?.emoji || '📌';
+
+/* ─────────────────────────────
+   TIME PARSER
+───────────────────────────── */
+function parseDelay(input) {
+  if (!input || input.toLowerCase() === 'now') return 0;
+
+  const m = input.match(/^(\d+)(m|h|d)$/i);
+  if (!m) return null;
+
+  const v = parseInt(m[1]);
+  const u = m[2].toLowerCase();
+
+  return {
+    m: v * 60 * 1000,
+    h: v * 60 * 60 * 1000,
+    d: v * 24 * 60 * 60 * 1000
+  }[u];
+}
+
+/* ─────────────────────────────
+   COMMAND
+───────────────────────────── */
 function registerAnnounceCommand(bot) {
   bot.command('announce', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return ctx.reply('This command is restricted to administrators.');
-    session.set('announce', ctx.from.id, { awaitingContent: true });
-    await ctx.reply(
-      '*NEW ANNOUNCEMENT*\n\nEnter the announcement text (max 2000 chars).\n\nOr send a photo with a caption for a visual post.\n\nType /cancel to abort.',
-      { parse_mode: 'Markdown' }
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Admins only.');
+    }
+
+    session.set('announce', ctx.from.id, { step: 'type' });
+
+    return ctx.reply(
+      `NEW ANNOUNCEMENT\n\n` +
+      TYPES.join('\n')
     );
   });
 }
 
-async function handleAnnounceText(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('announce', userId);
-  if (!s || !s.awaitingContent) return false;
+/* ─────────────────────────────
+   TEXT FLOW
+───────────────────────────── */
+async function handleAnnounceText(ctx) {
+  const id = ctx.from.id;
+  const s = session.get('announce', id);
+  if (!s) return false;
 
   const text = ctx.message.text.trim();
 
-  if (text.length < 1) {
-    await ctx.reply('Announcement text cannot be empty.');
-    return true;
-  }
-  if (text.length > MAX_ANNOUNCE_TEXT) {
-    await ctx.reply(`Announcement is too long (${text.length} chars). Maximum is ${MAX_ANNOUNCE_TEXT}.`);
-    return true;
+  /* TYPE STEP */
+  if (s.step === 'type') {
+    const type = text.toUpperCase();
+
+    if (!TYPES.includes(type)) {
+      return ctx.reply('Invalid type.');
+    }
+
+    if (type === 'OTHER') {
+      session.set('announce', id, { step: 'custom' });
+      return ctx.reply('Enter custom type:');
+    }
+
+    session.set('announce', id, {
+      step: 'content',
+      type
+    });
+
+    return ctx.reply('Send content:');
   }
 
-  session.del('announce', userId);
-  const post = formatAnnouncement(text);
-  session.set('announce_confirm', userId, { content: text, post });
+  /* CUSTOM TYPE */
+  if (s.step === 'custom') {
+    session.set('announce', id, {
+      step: 'content',
+      type: text.toUpperCase()
+    });
 
-  await ctx.reply(
-    `*PREVIEW — Announcement*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━━━━━━━━━\nReply *CONFIRM* to publish or *CANCEL* to discard.`,
-    { parse_mode: 'Markdown' }
-  );
-  return true;
+    return ctx.reply('Send content:');
+  }
+
+  /* CONTENT */
+  if (s.step === 'content') {
+    if (text.length > MAX_TEXT) {
+      return ctx.reply('Too long.');
+    }
+
+    session.set('announce', id, {
+      step: 'schedule',
+      type: s.type,
+      content: text
+    });
+
+    return ctx.reply('Schedule: now | 10m | 1h | 1d');
+  }
+
+  /* SCHEDULE */
+  if (s.step === 'schedule') {
+    const delay = parseDelay(text);
+    if (delay === null) return ctx.reply('Invalid format.');
+
+    const scheduledAt = new Date(Date.now() + delay);
+
+    session.set('announce_confirm', id, {
+      type: s.type,
+      content: s.content,
+      scheduledAt
+    });
+
+    session.del('announce', id);
+
+    return ctx.reply(
+      `${getEmoji(s.type)} Preview — ${s.type}\nReply CONFIRM or CANCEL`
+    );
+  }
+
+  return false;
 }
 
+/* ─────────────────────────────
+   CONFIRM FLOW
+───────────────────────────── */
 async function handleAnnounceConfirm(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('announce_confirm', userId);
+  const id = ctx.from.id;
+  const s = session.get('announce_confirm', id);
   if (!s) return false;
 
-  const text = ctx.message.text.trim().toUpperCase();
+  const text = ctx.message.text.toUpperCase();
 
   if (text === 'CANCEL') {
-    session.del('announce_confirm', userId);
-    await ctx.reply('Announcement discarded. No changes were made.');
-    return true;
+    session.del('announce_confirm', id);
+    return ctx.reply('Cancelled.');
   }
 
-  if (text === 'CONFIRM') {
-    session.del('announce_confirm', userId);
-    db.insertAnnouncement({ content: s.content, posted_by: userId });
-    try {
-      await bot.telegram.sendMessage(process.env.COMMUNITY_CHAT_ID, s.post, {
-        parse_mode: 'Markdown',
-      });
-      await ctx.reply('Announcement published successfully.');
-    } catch (err) {
-      console.error('[announce] Post failed:', err.message);
-      await ctx.reply('Announcement saved but posting failed. Check bot permissions.');
-    }
-    return true;
+  if (text !== 'CONFIRM') {
+    return ctx.reply('CONFIRM or CANCEL');
   }
 
-  // FIX R4: Clear guidance instead of silently ignoring
-  await ctx.reply('Please reply with *CONFIRM* to publish or *CANCEL* to discard.', {
-    parse_mode: 'Markdown',
-  });
-  return true;
+  session.del('announce_confirm', id);
+
+  const isScheduled = s.scheduledAt > new Date();
+
+  /* ─────────────────────────────
+     SCHEDULED POST
+  ───────────────────────────── */
+  if (isScheduled) {
+    await db.insertScheduledPost({
+      post_type: 'announcement',
+      post_data: {
+        type: s.type,
+        content: s.content
+      },
+      scheduled_at: s.scheduledAt,
+      posted_by: id
+    });
+
+    return ctx.reply('Scheduled successfully.');
+  }
+
+  /* ─────────────────────────────
+     IMMEDIATE POST (FIXED)
+  ───────────────────────────── */
+  try {
+    const emoji = getEmoji(s.type);
+
+    const formatted =
+      `${emoji} *${s.type}*\n` +
+      '━━━━━━━━━━━━━━\n\n' +
+      sanitize(s.content);
+
+    const sent = await bot.telegram.sendMessage(
+      process.env.COMMUNITY_CHAT_ID,
+      formatted,
+      { parse_mode: 'Markdown' }
+    );
+
+    await db.insertAnnouncement({
+      announcement_type: s.type,
+      content: s.content,
+      posted_by: id,
+      message_id: sent.message_id
+    });
+
+    return ctx.reply('Published.');
+  } catch (e) {
+    console.error('[announce]', e);
+    return ctx.reply('Failed.');
+  }
 }
 
-/** Photo with caption submitted while in announce session */
-async function handleAnnouncePhoto(ctx, bot) {
-  const userId = ctx.from.id;
-  const s      = session.get('announce', userId);
-  if (!s || !s.awaitingContent) return false;
+/* ─────────────────────────────
+   PHOTO FLOW (FIXED)
+───────────────────────────── */
+async function handleAnnouncePhoto(ctx) {
+  const id = ctx.from.id;
+  const s = session.get('announce', id);
 
-  session.del('announce', userId);
+  if (!s || !s.type) return false;
 
-  // FIX R8: Cap at MAX_PHOTO_CAPTION so header + footer don't exceed Telegram's 1024-char limit
-  const rawCaption = (ctx.message.caption || '').trim();
-  const caption    = rawCaption.slice(0, MAX_PHOTO_CAPTION);
-  const photo      = ctx.message.photo;
-  const fileId     = photo[photo.length - 1].file_id;
+  const emoji = getEmoji(s.type);
+  const captionRaw = (ctx.message.caption || '').trim();
+  const fileId = ctx.message.photo.at(-1).file_id;
 
-  // Header ~26 chars + dividers ~48 chars + footer ~26 chars = ~100 chars overhead
-  const formattedCaption =
-    '*PROJECT SPOTLIGHT*\n' +
-    '━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
-    sanitize(caption || 'Instollar Project Update', MAX_PHOTO_CAPTION) +
-    '\n\n━━━━━━━━━━━━━━━━━━━━━━━\n' +
-    '#Instollar #SolarNigeria';
+  const caption =
+    `${emoji} *${s.type}*\n` +
+    '━━━━━━━━━━━━━━\n\n' +
+    sanitize(captionRaw || 'Announcement').slice(0, MAX_CAPTION);
 
-  db.insertAnnouncement({ content: caption || '[Photo post]', posted_by: userId });
+  session.del('announce', id);
 
   try {
-    await bot.telegram.sendPhoto(process.env.COMMUNITY_CHAT_ID, fileId, {
-      caption: formattedCaption,
-      parse_mode: 'Markdown',
+    const sent = await ctx.telegram.sendPhoto(
+      process.env.COMMUNITY_CHAT_ID,
+      fileId,
+      {
+        caption,
+        parse_mode: 'Markdown'
+      }
+    );
+
+    await db.insertAnnouncement({
+      announcement_type: s.type,
+      content: captionRaw,
+      posted_by: id,
+      message_id: sent.message_id
     });
-    await ctx.reply('Photo announcement published successfully.');
-  } catch (err) {
-    console.error('[announce photo] Failed:', err.message);
-    await ctx.reply('Failed to post the photo. Check bot permissions and try again.');
+
+    return ctx.reply('Posted.');
+  } catch (e) {
+    console.error('[photo]', e);
+    return ctx.reply('Failed.');
   }
-  return true;
 }
 
+/* ─────────────────────────────
+   EXPORTS
+───────────────────────────── */
 module.exports = {
   registerAnnounceCommand,
   handleAnnounceText,
   handleAnnounceConfirm,
-  handleAnnouncePhoto,
+  handleAnnouncePhoto
 };

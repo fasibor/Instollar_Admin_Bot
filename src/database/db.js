@@ -1,105 +1,75 @@
 /**
- * Instollar Bot — PostgreSQL Database Layer
- *
- * Migrated from SQLite to PostgreSQL for Railway compatibility
- * and persistent data across restarts
+ * Instollar Bot — PostgreSQL DB Layer (Production Ready)
  */
 
 const { Pool } = require('pg');
 require('dotenv').config();
 
-let pool = null;
-let _initialized = false;
+let pool;
 
-// ─────────────────────────────────────────────
-// DB INIT
-// ─────────────────────────────────────────────
-
+/* ─────────────────────────────
+   INIT DB
+───────────────────────────── */
 async function initDb() {
-  if (_initialized) return;
+  if (pool) return;
 
-  const DATABASE_URL = process.env.DATABASE_URL;
-
-  if (!DATABASE_URL) {
-    console.error('[DB] DATABASE_URL not set. Available env vars:', Object.keys(process.env).filter(k => k.includes('DATABASE') || k.includes('POSTGRES') || k.includes('RAILWAY')));
-    throw new Error('DATABASE_URL environment variable is not set');
-  }
-
-  console.log('[DB] Connecting to PostgreSQL...');
   pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: {
-      rejectUnauthorized: false
-    }
-  });
-
-  pool.on('error', (err) => {
-    console.error('[DB] Pool error:', err);
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
   });
 
   const client = await pool.connect();
 
   try {
-    // Create installations table
+    /* INSTALLATIONS */
     await client.query(`
       CREATE TABLE IF NOT EXISTS installations (
         id SERIAL PRIMARY KEY,
-        location TEXT NOT NULL,
-        client_name TEXT NOT NULL,
-        system_size TEXT NOT NULL,
-        battery TEXT NOT NULL,
-        battery_count INTEGER,
-        panels INTEGER NOT NULL,
-        panel_wattage TEXT,
-        photo_file_id TEXT,
-        video_file_id TEXT,
-        posted_by BIGINT NOT NULL,
+        location TEXT,
+        client_name TEXT,
+        system_size TEXT,
+        battery TEXT,
+        panels INTEGER,
+        posted_by BIGINT,
         message_id BIGINT,
-        scheduled_at TIMESTAMP,
-        is_scheduled BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Create gigs table
+    /* GIGS */
     await client.query(`
       CREATE TABLE IF NOT EXISTS gigs (
         id SERIAL PRIMARY KEY,
-        gig_type TEXT NOT NULL DEFAULT 'Installation',
-        location TEXT NOT NULL,
-        timeline TEXT NOT NULL,
+        gig_type TEXT,
+        location TEXT,
+        timeline TEXT,
         scope TEXT,
-        inverter_count INTEGER,
-        battery_count INTEGER,
-        panel_wattage TEXT,
-        system_size TEXT,
-        battery TEXT,
-        panels INTEGER,
-        posted_by BIGINT NOT NULL,
+        posted_by BIGINT,
         message_id BIGINT,
         status TEXT DEFAULT 'open',
         created_at TIMESTAMP DEFAULT NOW()
       );
-    `)
+    `);
 
-    // Create applications table
+    /* APPLICATIONS */
     await client.query(`
       CREATE TABLE IF NOT EXISTS applications (
         id SERIAL PRIMARY KEY,
-        gig_id INTEGER NOT NULL REFERENCES gigs(id),
-        full_name TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        email TEXT NOT NULL,
+        gig_id INTEGER,
+        full_name TEXT,
+        phone TEXT,
+        email TEXT,
         telegram_id BIGINT,
         username TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Create announcements table
+    /* ANNOUNCEMENTS (HISTORY) */
     await client.query(`
       CREATE TABLE IF NOT EXISTS announcements (
         id SERIAL PRIMARY KEY,
+        announcement_type TEXT DEFAULT 'ANNOUNCEMENT',
         content TEXT NOT NULL,
         posted_by BIGINT NOT NULL,
         message_id BIGINT,
@@ -107,233 +77,103 @@ async function initDb() {
       );
     `);
 
-    // Create scheduled_posts table
+    /* SCHEDULED POSTS (QUEUE SYSTEM) */
     await client.query(`
       CREATE TABLE IF NOT EXISTS scheduled_posts (
         id SERIAL PRIMARY KEY,
-        post_type TEXT NOT NULL,
-        post_data JSONB NOT NULL,
-        scheduled_at TIMESTAMP NOT NULL,
-        posted_by BIGINT NOT NULL,
-        message_id BIGINT,
+        post_type TEXT,
+        post_data JSONB,
+        scheduled_at TIMESTAMP,
+        posted_by BIGINT,
         published BOOLEAN DEFAULT FALSE,
+        message_id BIGINT,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    _initialized = true;
-    console.log('[DB] PostgreSQL initialised and ready');
-  } catch (err) {
-    console.error('[DB] Initialisation error:', err);
-    throw err;
+    console.log('[DB] PostgreSQL ready');
   } finally {
     client.release();
   }
 }
 
-// ─────────────────────────────────────────────
-// INSTALLATIONS
-// ─────────────────────────────────────────────
-
-async function insertInstallation(data) {
-  const result = await pool.query(
-    `INSERT INTO installations (location, client_name, system_size, battery, panels, posted_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id`,
-    [data.location, data.client_name, data.system_size, data.battery, data.panels, data.posted_by]
+/* ─────────────────────────────
+   INSTALLATIONS
+───────────────────────────── */
+const insertInstallation = (d) =>
+  pool.query(
+    `INSERT INTO installations(location, client_name, system_size, battery, panels, posted_by)
+     VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [d.location, d.client_name, d.system_size, d.battery, d.panels, d.posted_by]
   );
-  return result.rows[0];
-}
 
-async function updateInstallationMessageId(id, message_id) {
-  await pool.query(
-    'UPDATE installations SET message_id = $1 WHERE id = $2',
+/* ─────────────────────────────
+   GIGS
+───────────────────────────── */
+const insertGig = (d) =>
+  pool.query(
+    `INSERT INTO gigs(gig_type, location, timeline, scope, posted_by)
+     VALUES($1,$2,$3,$4,$5) RETURNING id`,
+    [d.gig_type, d.location, d.timeline, d.scope, d.posted_by]
+  );
+
+/* ─────────────────────────────
+   SCHEDULED POSTS
+───────────────────────────── */
+const insertScheduledPost = (d) =>
+  pool.query(
+    `INSERT INTO scheduled_posts(post_type, post_data, scheduled_at, posted_by)
+     VALUES($1,$2,$3,$4) RETURNING id`,
+    [d.post_type, d.post_data, d.scheduled_at, d.posted_by]
+  );
+
+const getScheduledPosts = async () => {
+  const res = await pool.query(`
+    SELECT * FROM scheduled_posts
+    WHERE published = FALSE AND scheduled_at <= NOW()
+    ORDER BY scheduled_at ASC
+  `);
+  return res.rows;
+};
+
+const markScheduledPostPublished = (id, message_id) =>
+  pool.query(
+    `UPDATE scheduled_posts
+     SET published = TRUE,
+         message_id = $1
+     WHERE id = $2`,
     [message_id, id]
   );
-}
 
-// ─────────────────────────────────────────────
-// GIGS
-// ─────────────────────────────────────────────
-
-async function insertGig(data) {
-  const result = await pool.query(
-    `INSERT INTO gigs (gig_type, location, timeline, scope, inverter_count, battery_count, panel_wattage, system_size, battery, panels, posted_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING id`,
-    [data.gig_type || 'Installation', data.location, data.timeline, data.scope, data.inverter_count, data.battery_count, data.panel_wattage, data.system_size, data.battery, data.panels, data.posted_by]
-  );
-  return result.rows[0];
-}
-
-async function updateGigMessageId(id, message_id) {
-  await pool.query(
-    'UPDATE gigs SET message_id = $1 WHERE id = $2',
-    [message_id, id]
-  );
-}
-
-async function getGigById(id) {
-  const result = await pool.query(
-    'SELECT * FROM gigs WHERE id = $1',
-    [id]
-  );
-  return result.rows[0] || null;
-}
-
-// ─────────────────────────────────────────────
-// APPLICATIONS
-// ─────────────────────────────────────────────
-
-async function insertApplication(data) {
-  const result = await pool.query(
-    `INSERT INTO applications (gig_id, full_name, phone, email, telegram_id, username)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id`,
-    [data.gig_id, data.full_name, data.phone, data.email, data.telegram_id, data.username]
-  );
-  return result.rows[0];
-}
-
-async function hasApplied(gig_id, telegram_id) {
-  const result = await pool.query(
-    'SELECT id FROM applications WHERE gig_id = $1 AND telegram_id = $2',
-    [gig_id, telegram_id]
-  );
-  return result.rows.length > 0;
-}
-
-// ─────────────────────────────────────────────
-// STATS (WEEKLY / MONTHLY)
-// ─────────────────────────────────────────────
-
-async function getWeeklyStats() {
-  const result = await pool.query(`
-    SELECT
-      COALESCE(SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END), 0) AS installations,
-      COALESCE(SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END), 0) AS gigs,
-      COALESCE(SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END), 0) AS applications
-    FROM (
-      SELECT 'installation' AS type, created_at FROM installations
-      UNION ALL
-      SELECT 'gig' AS type, created_at FROM gigs
-      UNION ALL
-      SELECT 'application' AS type, created_at FROM applications
-    ) AS stats
-    WHERE created_at >= NOW() - INTERVAL '7 days'
-  `);
-
-  const row = result.rows[0];
-  return {
-    installations: parseInt(row.installations) || 0,
-    gigs: parseInt(row.gigs) || 0,
-    applications: parseInt(row.applications) || 0,
-  };
-}
-
-async function getMonthlyStats() {
-  const result = await pool.query(`
-    SELECT
-      COALESCE(SUM(CASE WHEN type = 'installation' THEN 1 ELSE 0 END), 0) AS installations,
-      COALESCE(SUM(CASE WHEN type = 'gig' THEN 1 ELSE 0 END), 0) AS gigs,
-      COALESCE(SUM(CASE WHEN type = 'application' THEN 1 ELSE 0 END), 0) AS applications
-    FROM (
-      SELECT 'installation' AS type, created_at FROM installations
-      UNION ALL
-      SELECT 'gig' AS type, created_at FROM gigs
-      UNION ALL
-      SELECT 'application' AS type, created_at FROM applications
-    ) AS stats
-    WHERE created_at >= NOW() - INTERVAL '30 days'
-  `);
-
-  const row = result.rows[0];
-  return {
-    installations: parseInt(row.installations) || 0,
-    gigs: parseInt(row.gigs) || 0,
-    applications: parseInt(row.applications) || 0,
-  };
-}
-
-// ─────────────────────────────────────────────
-// SCHEDULED POSTS
-// ─────────────────────────────────────────────
-
-async function insertScheduledPost(data) {
-  const result = await pool.query(
-    `INSERT INTO scheduled_posts (post_type, post_data, scheduled_at, posted_by)
+/* ─────────────────────────────
+   INSERT ANNOUNCEMENT
+───────────────────────────── */
+const insertAnnouncement = (d) =>
+  pool.query(
+    `INSERT INTO announcements
+     (announcement_type, content, posted_by, message_id)
      VALUES ($1, $2, $3, $4)
      RETURNING id`,
-    [data.post_type, JSON.stringify(data.post_data), data.scheduled_at, data.posted_by]
+    [
+      d.announcement_type || 'ANNOUNCEMENT',
+      d.content,
+      d.posted_by,
+      d.message_id || null
+    ]
   );
-  return result.rows[0];
-}
 
-async function getScheduledPosts(limit = 100) {
-  const result = await pool.query(
-    `SELECT * FROM scheduled_posts WHERE published = FALSE AND scheduled_at <= NOW()
-     ORDER BY scheduled_at ASC LIMIT $1`,
-    [limit]
-  );
-  return result.rows;
-}
-
-async function markScheduledPostPublished(id, message_id) {
-  await pool.query(
-    'UPDATE scheduled_posts SET published = TRUE, message_id = $1 WHERE id = $2',
-    [message_id, id]
-  );
-}
-
-// ─────────────────────────────────────────────
-// GRACEFUL SHUTDOWN
-// ─────────────────────────────────────────────
-
-async function flushSync() {
-  try {
-    if (pool) {
-      await pool.end();
-      console.log('[DB] Connection pool closed');
-    }
-  } catch (err) {
-    console.error('[DB] Error closing pool:', err);
-  }
-}
-
-process.on('SIGINT', flushSync);
-process.on('SIGTERM', flushSync);
-process.on('exit', flushSync);
-
-// ─────────────────────────────────────────────
-// EXPORTS
-// ─────────────────────────────────────────────
-
+/* ─────────────────────────────
+   EXPORTS
+───────────────────────────── */
 module.exports = {
   initDb,
-  flushSync,
 
   insertInstallation,
-  updateInstallationMessageId,
-
   insertGig,
-  updateGigMessageId,
-  getGigById,
-
-  insertApplication,
-  hasApplied,
-
-  insertAnnouncement: async (data) => {
-    const result = await pool.query(
-      'INSERT INTO announcements (content, posted_by) VALUES ($1, $2) RETURNING id',
-      [data.content, data.posted_by]
-    );
-    return result.rows[0];
-  },
 
   insertScheduledPost,
   getScheduledPosts,
   markScheduledPostPublished,
 
-  getWeeklyStats,
-  getMonthlyStats,
+  insertAnnouncement
 };
